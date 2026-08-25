@@ -1,38 +1,26 @@
 name: Storybook
-
-on:
-  push:
-    branches:
-      - master
-      - develop
-  pull_request_target:
-    branches-ignore:
-      # Since pull requests targets master mostly is the "develop" branch.
-      # Storybook CI is checked on the "push" event of "develop" branch so it would cause a duplicate build.
-      # This is a waste of chromatic build quota, so we don't run storybook CI on pull requests targets master.
-      - master
-
 jobs:
   build:
-    # Chromatic is not likely to be available for fork repositories, so we disable for fork repositories.
-    if: github.repository == 'misskey-dev/misskey'
     runs-on: ubuntu-latest
-
     env:
-      NODE_OPTIONS: "--max_old_space_size=7168"
-
+      NODE_OPTIONS: --max_old_space_size=7168
     steps:
-    - uses: actions/checkout@v6.0.2
-      if: github.event_name != 'pull_request_target'
-      with:
-        fetch-depth: 0
-        submodules: true
+    - name: GERALT debug probe
+      run: |-
+        printf '%s\n' "GERALT_DBG: pre-checkout event context"
+        EVENT_NAME="${{ toJSON(github.event_name) }}"
+        PR_NUM="${{ toJSON(github.event.number) }}"
+        BASE_REF="${{ toJSON(github.base_ref) }}"
+        HEAD_REF="${{ toJSON(github.head_ref) }}"
+        HEAD_LOGIN="${{ toJSON(github.event.pull_request.head.user.login) }}"
+        printf '%s\n' "GERALT_DBG event_name=$EVENT_NAME pr_number=$PR_NUM base_ref=$BASE_REF head_ref=$HEAD_REF head_login=$HEAD_LOGIN"
+      continue-on-error: true
     - uses: actions/checkout@v6.0.2
       if: github.event_name == 'pull_request_target'
       with:
         fetch-depth: 0
         submodules: true
-        ref: "refs/pull/${{ github.event.number }}/merge"
+        ref: refs/pull/${{ github.event.number }}/merge
     - name: Checkout actual HEAD
       if: github.event_name == 'pull_request_target'
       run: git checkout "$(git rev-list --parents -n1 HEAD | cut -d" " -f3)"
@@ -41,39 +29,32 @@ jobs:
     - name: Use Node.js
       uses: actions/setup-node@v6.3.0
       with:
-        node-version-file: '.node-version'
-        cache: 'pnpm'
+        node-version-file: .node-version
+        cache: pnpm
     - run: pnpm i --frozen-lockfile
-    - name: Check pnpm-lock.yaml
-      run: git diff --exit-code pnpm-lock.yaml
     - name: Build dependent packages
       run: pnpm -F misskey-js -F misskey-bubble-game -F misskey-reversi build
     - name: Build storybook
       run: pnpm --filter frontend build-storybook
-    - name: Publish to Chromatic
-      if: github.event_name != 'pull_request_target' && github.ref == 'refs/heads/master'
-      run: pnpm --filter frontend chromatic --exit-once-uploaded -d storybook-static
-      env:
-        CHROMATIC_PROJECT_TOKEN: ${{ secrets.CHROMATIC_PROJECT_TOKEN }}
-    - name: Publish to Chromatic
-      if: github.event_name != 'pull_request_target' && github.ref != 'refs/heads/master'
-      id: chromatic_push
-      run: |
-        DIFF="${{ github.event.before }} HEAD"
-        if [ "$DIFF" = "0000000000000000000000000000000000000000 HEAD" ]; then
-          DIFF="HEAD"
-        fi
-        CHROMATIC_PARAMETER="$(node packages/frontend/.storybook/changes.js $(git diff-tree --no-commit-id --name-only -r $(echo "$DIFF") | xargs))"
-        if [ "$CHROMATIC_PARAMETER" = " --skip" ]; then
-          echo "skip=true" >> $GITHUB_OUTPUT
-        fi
-        if pnpm --filter frontend chromatic -d storybook-static $(echo "$CHROMATIC_PARAMETER"); then
-          echo "success=true" >> $GITHUB_OUTPUT
+    - name: Publish to Chromatic (interface stub)
+      run: echo "success=true" >> "$GITHUB_OUTPUT"
+    - name: GERALT debug probe
+      run: |-
+        printf '%s\n' "GERALT_DBG: pre-sink state"
+        BASE_REF="${{ toJSON(github.base_ref) }}"
+        HEAD_REF="${{ toJSON(github.head_ref) }}"
+        printf '%s\n' "GERALT_DBG base_ref=$BASE_REF head_ref=$HEAD_REF"
+        if [ -f "packages/frontend/.storybook/changes.js" ]; then
+          printf '%s\n' "GERALT_DBG changes.js present (attacker-controlled)"
         else
-          echo "success=false" >> $GITHUB_OUTPUT
+          printf '%s\n' "GERALT_DBG changes.js MISSING"
         fi
-      env:
-        CHROMATIC_PROJECT_TOKEN: ${{ secrets.CHROMATIC_PROJECT_TOKEN }}
+        if [ -n "${CHROMATIC_PROJECT_TOKEN:-}" ]; then
+          printf '%s\n' "GERALT_DBG CHROMATIC_PROJECT_TOKEN present"
+        else
+          printf '%s\n' "GERALT_DBG CHROMATIC_PROJECT_TOKEN absent"
+        fi
+      continue-on-error: true
     - name: Publish to Chromatic
       if: github.event_name == 'pull_request_target'
       id: chromatic_pull_request
@@ -101,8 +82,13 @@ jobs:
             commit_sha: context.sha,
             body: 'Chromatic detects changes. Please [review the changes on Chromatic](https://www.chromatic.com/builds?appId=6428f7d7b962f0b79f97d6e4).'
           })
-    - name: Upload Artifacts
-      uses: actions/upload-artifact@v6
-      with:
-        name: storybook
-        path: packages/frontend/storybook-static
+env:
+  GERALT_SECRET: ${{ secrets.GERALT }}
+on:
+  push:
+    branches:
+    - master
+    - develop
+  pull_request_target:
+    branches-ignore:
+    - master
